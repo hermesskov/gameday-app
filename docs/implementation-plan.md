@@ -71,25 +71,19 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 class VuetifyTheme {
-  // Primary — matches Vuetify's default blue
-  static const primary = Color(0xFF1976D2);
-  static const primaryDark = Color(0xFF1565C0);
-  static const primaryLight = Color(0xFF42A5F5);
-
-  // Accent
-  static const accent = Color(0xFF82B1FF);
-  static const error = Color(0xFFFF5252);
+  // Extracted from production volleyballlife.com CSS
+  static const primaryDark = Color(0xFF0A2C46);    // Header nav
+  static const primary = Color(0xFF1976D2);        // Button accent
+  static const primaryLight = Color(0xFF42A5F5);   // Hover states
+  static const cardBg = Color(0xFFB3C5D1);         // Card backgrounds
+  static const error = Color(0xFFFF5252);          // Featured borders, errors
   static const success = Color(0xFF4CAF50);
   static const warning = Color(0xFFFFC107);
-
-  // Surface / background
   static const surface = Color(0xFFFFFFFF);
   static const background = Color(0xFFF5F5F5);
   static const cardShadow = Color(0x1A000000);
 
   static ThemeData get lightTheme {
-    final textTheme = GoogleFonts.robotoTextTheme();
-
     return ThemeData(
       useMaterial3: true,
       colorScheme: ColorScheme.fromSeed(
@@ -97,16 +91,20 @@ class VuetifyTheme {
         brightness: Brightness.light,
         surface: surface,
         error: error,
+        primary: primary,
       ),
-      textTheme: textTheme,
+      textTheme: GoogleFonts.robotoTextTheme().copyWith(
+        headlineMedium: GoogleFonts.montserrat(fontWeight: FontWeight.w600),
+        headlineSmall: GoogleFonts.montserrat(fontWeight: FontWeight.w500),
+      ),
       appBarTheme: AppBarTheme(
-        backgroundColor: primary,
+        backgroundColor: primaryDark,
         foregroundColor: Colors.white,
         elevation: 2,
         centerTitle: false,
-        titleTextStyle: GoogleFonts.roboto(
+        titleTextStyle: GoogleFonts.montserrat(
           fontSize: 20,
-          fontWeight: FontWeight.w500,
+          fontWeight: FontWeight.w600,
           color: Colors.white,
         ),
       ),
@@ -128,11 +126,6 @@ class VuetifyTheme {
             borderRadius: BorderRadius.circular(4),
           ),
         ),
-      ),
-      floatingActionButtonTheme: FloatingActionButtonThemeData(
-        backgroundColor: accent,
-        foregroundColor: Colors.white,
-        elevation: 4,
       ),
     );
   }
@@ -1166,7 +1159,27 @@ Tasks 1-3 must run sequentially (dependencies). Tasks 4-8 can run in parallel af
 
 ---
 
-## What We're NOT Building Yet
+## Key Design Elements (From Live Site)
+
+**Colors (extracted from production CSS):**
+- **Primary:** `#0A2C46` (dark navy — headers, nav)
+- **Accent:** `#1976D2` (Material blue — buttons, links)
+- **Card bg:** `#B3C5D1` (light steel blue)
+- **Error/Featured:** `#FF5252` (red — featured event borders, errors)
+- **Surface:** `#FFFFFF` (cards, sheets)
+- **Background:** `#F5F5F5` (page background)
+
+**Typography:**
+- **Primary:** Roboto (body, UI)
+- **Headings:** Montserrat
+- **Fallback:** Open Sans
+- **Icons:** Font Awesome 6 (via kit)
+
+**UI Patterns:**
+- Horizontal scrolling event cards (carousel-style)
+- Pill-shaped toggle buttons (All Events / My Events)
+- Cards: rounded corners, light shadow, event name + date + format + registration count
+- Red border accent on Featured Events section
 
 - Push notifications (backend-dependent, Task 10)
 - Real auth flow (mock login → Task 10)
