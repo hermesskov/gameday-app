@@ -3,6 +3,44 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../models/schedule_event.dart';
 import '../services/providers.dart';
+import '../services/real_api_client.dart';
+
+/// Tracks scores for a single set/game.
+class _SetScore {
+  final int number;
+  final int home;
+  final int away;
+  final bool isFinal;
+
+  const _SetScore({
+    required this.number,
+    required this.home,
+    required this.away,
+    this.isFinal = false,
+  });
+
+  bool get isComplete =>
+      isFinal || _hasWinningScore(home, away) || _hasWinningScore(away, home);
+
+  _SetScore copyWith({int? home, int? away, bool? isFinal}) {
+    return _SetScore(
+      number: number,
+      home: home ?? this.home,
+      away: away ?? this.away,
+      isFinal: isFinal ?? this.isFinal,
+    );
+  }
+
+  static bool _hasWinningScore(int a, int b) {
+    return a >= 25 && a - b >= 2 || a >= 30;
+  }
+
+  Map<String, dynamic> toJson() => {
+        'number': number,
+        'home': home,
+        'away': away,
+      };
+}
 
 class LiveScoreScreen extends ConsumerStatefulWidget {
   final ScheduleEvent event;
@@ -14,60 +52,129 @@ class LiveScoreScreen extends ConsumerStatefulWidget {
 }
 
 class _LiveScoreScreenState extends ConsumerState<LiveScoreScreen> {
-  late int _scoreA;
-  late int _scoreB;
-  final List<_ScoreSnapshot> _history = [];
+  /// Completed sets — added when a set ends.
+  final List<_SetScore> _completedSets = [];
+
+  /// Current set being played.
+  late _SetScore _currentSet;
+
+  /// Undo history for the current set only (cross-set undo is too complex).
+  final List<_SetScore> _history = [];
+
   bool _submitting = false;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    // Initialize from existing scores if any
-    if (widget.event.games != null && widget.event.games!.isNotEmpty) {
-      _scoreA = widget.event.games!.first.home ?? 0;
-      _scoreB = widget.event.games!.first.away ?? 0;
-    } else {
-      _scoreA = 0;
-      _scoreB = 0;
-    }
+    _currentSet = _SetScore(
+      number: 1,
+      home: widget.event.games?.isNotEmpty == true
+          ? widget.event.games!.first.home ?? 0
+          : 0,
+      away: widget.event.games?.isNotEmpty == true
+          ? widget.event.games!.first.away ?? 0
+          : 0,
+    );
 
-    // Start scoring session if not already started
     if (widget.event.canScore && widget.event.liveScoring != null) {
       _startScoring();
     }
   }
 
   Future<void> _startScoring() async {
-    final api = ref.read(apiClientProvider);
-    await api.startScoring(widget.event.matchId);
+    try {
+      final api = ref.read(apiClientProvider);
+      await api.startScoring(widget.event.matchId);
+      if (mounted) setState(() {});
+    } on AuthExpiredException {
+      // handled globally
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Could not start scoring session.');
+    }
   }
 
-  void _addPoint(bool teamA) {
+  void _addPointHome() => _addPoint(true);
+  void _addPointAway() => _addPoint(false);
+
+  void _addPoint(bool home) {
     setState(() {
-      _history.add(_ScoreSnapshot(scoreA: _scoreA, scoreB: _scoreB));
-      if (teamA) {
-        _scoreA++;
+      _history.add(_currentSet);
+      if (home) {
+        _currentSet = _currentSet.copyWith(home: _currentSet.home + 1);
       } else {
-        _scoreB++;
+        _currentSet = _currentSet.copyWith(away: _currentSet.away + 1);
       }
     });
   }
 
-  void _undo() {
-    if (_history.isEmpty) return;
+  void _subtractPointHome() => _subtractPoint(true);
+  void _subtractPointAway() => _subtractPoint(false);
+
+  void _subtractPoint(bool home) {
+    if (home && _currentSet.home <= 0) return;
+    if (!home && _currentSet.away <= 0) return;
+
     setState(() {
-      final prev = _history.removeLast();
-      _scoreA = prev.scoreA;
-      _scoreB = prev.scoreB;
+      _history.add(_currentSet);
+      if (home) {
+        _currentSet = _currentSet.copyWith(home: _currentSet.home - 1);
+      } else {
+        _currentSet = _currentSet.copyWith(away: _currentSet.away - 1);
+      }
     });
   }
 
+  void _undoCurrentSet() {
+    if (_history.isEmpty) return;
+    setState(() {
+      _currentSet = _history.removeLast();
+    });
+  }
+
+  /// Advance to the next set when current set is complete.
+  void _nextSet() {
+    final finalSet = _currentSet.copyWith(isFinal: true);
+    setState(() {
+      _completedSets.add(finalSet);
+      _history.clear();
+      _currentSet = _SetScore(
+        number: _currentSet.number + 1,
+        home: 0,
+        away: 0,
+      );
+    });
+  }
+
+  bool get _isMatchComplete {
+    // Best-of-3: first to 2 sets
+    int homeWon = 0;
+    int awayWon = 0;
+    for (final s in _completedSets) {
+      if (s.home > s.away) homeWon++;
+      else if (s.away > s.home) awayWon++;
+    }
+    return homeWon >= 2 || awayWon >= 2;
+  }
+
+  int get _homeSetsWon =>
+      _completedSets.where((s) => s.home > s.away).length;
+  int get _awaySetsWon =>
+      _completedSets.where((s) => s.away > s.home).length;
+
+  bool get _showNextSetDialog =>
+      _currentSet.isComplete && !_isMatchComplete;
+
   Future<void> _submit() async {
-    setState(() => _submitting = true);
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
 
     try {
       final api = ref.read(apiClientProvider);
-      await api.updateScore(widget.event.matchId, _scoreA, _scoreB);
+
+      await api.updateScore(widget.event.matchId, _currentSet.home, _currentSet.away);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -78,6 +185,8 @@ class _LiveScoreScreenState extends ConsumerState<LiveScoreScreen> {
         );
         context.pop();
       }
+    } on AuthExpiredException {
+      // handled globally
     } catch (e) {
       if (mounted) {
         setState(() => _submitting = false);
@@ -92,9 +201,9 @@ class _LiveScoreScreenState extends ConsumerState<LiveScoreScreen> {
   }
 
   String get _homeName =>
-      widget.event.homeTeam?.name ?? widget.event.awayTeam?.name ?? 'Team A';
+      widget.event.homeTeam?.name ?? widget.event.awayTeam?.name ?? 'Home';
   String get _awayName =>
-      widget.event.awayTeam?.name ?? widget.event.homeTeam?.name ?? 'Team B';
+      widget.event.awayTeam?.name ?? widget.event.homeTeam?.name ?? 'Away';
 
   @override
   Widget build(BuildContext context) {
@@ -111,12 +220,11 @@ class _LiveScoreScreenState extends ConsumerState<LiveScoreScreen> {
           onPressed: () => context.pop(),
         ),
         actions: [
-          // Undo
           IconButton(
             icon: const Icon(Icons.undo),
-            onPressed: _history.isEmpty ? null : _undo,
+            tooltip: 'Undo',
+            onPressed: _history.isEmpty ? null : _undoCurrentSet,
           ),
-          // Submit
           IconButton(
             icon: _submitting
                 ? const SizedBox(
@@ -126,78 +234,137 @@ class _LiveScoreScreenState extends ConsumerState<LiveScoreScreen> {
                         strokeWidth: 2, color: Colors.white),
                   )
                 : const Icon(Icons.check),
+            tooltip: 'Submit score',
             onPressed: _submitting ? null : _submit,
           ),
         ],
       ),
       body: Column(
         children: [
-          // Court info
+          // Match info header
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 8),
-            color: theme.colorScheme.primary.withOpacity(0.05),
+            color: theme.colorScheme.primary.withValues(alpha: 0.05),
             child: Center(
               child: Text(
-                widget.event.court != null
-                    ? 'Court ${widget.event.court} · Match #${widget.event.matchNumber}'
-                    : 'Match #${widget.event.matchNumber}',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: Colors.grey[600],
-                ),
+                '${widget.event.divisionName} · '
+                '${widget.event.court != null ? "Court ${widget.event.court} · " : ""}'
+                'Match #${widget.event.matchNumber}',
+                style: TextStyle(fontSize: 13, color: Colors.grey[600]),
               ),
             ),
           ),
+
+          // Set indicator tabs
+          _SetIndicator(
+            currentSet: _currentSet.number,
+            completedSets: _completedSets.length,
+            homeSetsWon: _homeSetsWon,
+            awaySetsWon: _awaySetsWon,
+            isMatchComplete: _isMatchComplete,
+            homeName: _homeName,
+            awayName: _awayName,
+          ),
+
+          // Error banner
+          if (_error != null)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(8),
+              color: theme.colorScheme.error.withValues(alpha: 0.1),
+              child: Row(
+                children: [
+                  Icon(Icons.warning,
+                      size: 16, color: theme.colorScheme.error),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _error!,
+                      style: TextStyle(
+                          fontSize: 13, color: theme.colorScheme.error),
+                    ),
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.close,
+                        size: 16, color: theme.colorScheme.error),
+                    onPressed: () => setState(() => _error = null),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                ],
+              ),
+            ),
+
+          // Next set dialog
+          if (_showNextSetDialog)
+            _NextSetBanner(onNextSet: _nextSet, onFinalize: _submit),
 
           // Score area
           Expanded(
             child: Row(
               children: [
-                // Team A — tap to score
+                // Home team
                 Expanded(
-                  child: GestureDetector(
-                    onTap: () => _addPoint(true),
-                    behavior: HitTestBehavior.opaque,
-                    child: Container(
-                      color: theme.colorScheme.primary.withOpacity(0.03),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            '$_scoreA',
-                            style: const TextStyle(
-                              fontSize: 96,
-                              fontWeight: FontWeight.bold,
-                              height: 1.1,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            child: Text(
-                              _homeName,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w500,
-                                color: Colors.grey[700],
-                              ),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'tap to score',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Colors.grey[400],
-                            ),
-                          ),
-                        ],
+                  child: Column(
+                    children: [
+                      _ScoreButton(
+                        icon: Icons.remove_circle_outline,
+                        onPressed: _subtractPointHome,
+                        disabled: _currentSet.home <= 0,
                       ),
-                    ),
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: _addPointHome,
+                          behavior: HitTestBehavior.opaque,
+                          child: Container(
+                            color: theme.colorScheme.primary
+                                .withValues(alpha: 0.03),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  '${_currentSet.home}',
+                                  style: const TextStyle(
+                                    fontSize: 96,
+                                    fontWeight: FontWeight.bold,
+                                    height: 1.1,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12),
+                                  child: Text(
+                                    _homeName,
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.grey[700],
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'tap to score',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.grey[400],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      _ScoreButton(
+                        icon: Icons.add_circle_outline,
+                        onPressed: _addPointHome,
+                      ),
+                    ],
                   ),
                 ),
 
@@ -207,50 +374,67 @@ class _LiveScoreScreenState extends ConsumerState<LiveScoreScreen> {
                   color: Colors.grey[200],
                 ),
 
-                // Team B — tap to score
+                // Away team
                 Expanded(
-                  child: GestureDetector(
-                    onTap: () => _addPoint(false),
-                    behavior: HitTestBehavior.opaque,
-                    child: Container(
-                      color: theme.colorScheme.secondary.withOpacity(0.03),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            '$_scoreB',
-                            style: const TextStyle(
-                              fontSize: 96,
-                              fontWeight: FontWeight.bold,
-                              height: 1.1,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            child: Text(
-                              _awayName,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w500,
-                                color: Colors.grey[700],
-                              ),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'tap to score',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Colors.grey[400],
-                            ),
-                          ),
-                        ],
+                  child: Column(
+                    children: [
+                      _ScoreButton(
+                        icon: Icons.remove_circle_outline,
+                        onPressed: _subtractPointAway,
+                        disabled: _currentSet.away <= 0,
                       ),
-                    ),
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: _addPointAway,
+                          behavior: HitTestBehavior.opaque,
+                          child: Container(
+                            color: theme.colorScheme.secondary
+                                .withValues(alpha: 0.03),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  '${_currentSet.away}',
+                                  style: const TextStyle(
+                                    fontSize: 96,
+                                    fontWeight: FontWeight.bold,
+                                    height: 1.1,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12),
+                                  child: Text(
+                                    _awayName,
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.grey[700],
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'tap to score',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.grey[400],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      _ScoreButton(
+                        icon: Icons.add_circle_outline,
+                        onPressed: _addPointAway,
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -268,16 +452,14 @@ class _LiveScoreScreenState extends ConsumerState<LiveScoreScreen> {
             ),
             child: Row(
               children: [
-                // Undo button
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: _history.isEmpty ? null : _undo,
+                    onPressed: _history.isEmpty ? null : _undoCurrentSet,
                     icon: const Icon(Icons.undo, size: 20),
                     label: const Text('UNDO'),
                   ),
                 ),
                 const SizedBox(width: 12),
-                // Submit button
                 Expanded(
                   flex: 2,
                   child: ElevatedButton.icon(
@@ -290,7 +472,8 @@ class _LiveScoreScreenState extends ConsumerState<LiveScoreScreen> {
                                 strokeWidth: 2, color: Colors.white),
                           )
                         : const Icon(Icons.check, size: 20),
-                    label: Text(_submitting ? 'SUBMITTING...' : 'SUBMIT SCORE'),
+                    label: Text(
+                        _submitting ? 'SUBMITTING...' : 'SUBMIT SCORE'),
                   ),
                 ),
               ],
@@ -302,9 +485,180 @@ class _LiveScoreScreenState extends ConsumerState<LiveScoreScreen> {
   }
 }
 
-class _ScoreSnapshot {
-  final int scoreA;
-  final int scoreB;
+/// Shows set tabs and which team won each set.
+class _SetIndicator extends StatelessWidget {
+  final int currentSet;
+  final int completedSets;
+  final int homeSetsWon;
+  final int awaySetsWon;
+  final bool isMatchComplete;
+  final String homeName;
+  final String awayName;
 
-  const _ScoreSnapshot({required this.scoreA, required this.scoreB});
+  const _SetIndicator({
+    required this.currentSet,
+    required this.completedSets,
+    required this.homeSetsWon,
+    required this.awaySetsWon,
+    required this.isMatchComplete,
+    required this.homeName,
+    required this.awayName,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final totalSets = isMatchComplete ? completedSets + 1 : currentSet;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.grey[50],
+        border: Border(bottom: BorderSide(color: Colors.grey[200]!)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          // Show sets won by home
+          if (homeSetsWon > 0)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Text(
+                '$homeName $homeSetsWon',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+            ),
+          // Set indicators
+          ...List.generate(totalSets, (i) {
+            final setNum = i + 1;
+            final isCurrent = setNum == currentSet;
+            final isPast = setNum < currentSet;
+            return Container(
+              margin: const EdgeInsets.symmetric(horizontal: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: isCurrent
+                    ? theme.colorScheme.primary.withValues(alpha: 0.1)
+                    : isPast
+                        ? Colors.green.withValues(alpha: 0.1)
+                        : Colors.transparent,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                'Set $setNum',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight:
+                      isCurrent ? FontWeight.w600 : FontWeight.normal,
+                  color: isCurrent
+                      ? theme.colorScheme.primary
+                      : isPast
+                          ? Colors.green
+                          : Colors.grey[500],
+                ),
+              ),
+            );
+          }),
+          // Show sets won by away
+          if (awaySetsWon > 0)
+            Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: Text(
+                '$awaySetsWon $awayName',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: theme.colorScheme.secondary,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }
+
+/// Banner shown when a set is complete — offers to start next set or finalize.
+class _NextSetBanner extends StatelessWidget {
+  final VoidCallback onNextSet;
+  final VoidCallback onFinalize;
+
+  const _NextSetBanner({
+    required this.onNextSet,
+    required this.onFinalize,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      color: Colors.green.withValues(alpha: 0.08),
+      child: Row(
+        children: [
+          Icon(Icons.emoji_events, color: Colors.green[700], size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Set complete!',
+              style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.green[700]),
+            ),
+          ),
+          TextButton(
+            onPressed: onFinalize,
+            child: const Text('FINALIZE', style: TextStyle(fontSize: 12)),
+          ),
+          const SizedBox(width: 4),
+          ElevatedButton(
+            onPressed: onNextSet,
+            style: ElevatedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              textStyle: const TextStyle(fontSize: 12),
+            ),
+            child: const Text('NEXT SET'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ScoreButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onPressed;
+  final bool disabled;
+
+  const _ScoreButton({
+    required this.icon,
+    required this.onPressed,
+    this.disabled = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 44,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: disabled ? null : onPressed,
+          child: Center(
+            child: Icon(
+              icon,
+              size: 28,
+              color: disabled ? Colors.grey[300] : Colors.grey[500],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
