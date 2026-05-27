@@ -6,34 +6,33 @@ import 'auth_service.dart';
 
 /// Real auth service for volleyballlife.com.
 ///
-/// Uses the VBL code-based auth flow:
-///   1. POST /account/code  → sends verification code to email
-///   2. POST /account/code-login  → exchanges code for session token
+/// Uses the VBL password-based login flow:
+///   POST /Account/Login  → {userName, password} → {access_token, data}
 ///
 /// The token is stored securely via flutter_secure_storage.
+/// Tokens last 30 days, so re-auth is infrequent.
 class RealAuthService implements AuthService {
   static const _tokenKey = 'vbl_session_token';
+  static const _baseUrl =
+      'https://api-v8.volleyballlife.com';
 
   final http.Client _client;
   final FlutterSecureStorage _storage;
 
   String? _token;
+
+  /// User info extracted from the login response's `data` payload.
   int? _userId;
   String? _userName;
 
   RealAuthService({
-    required String? Function() baseUrl,
     http.Client? client,
     FlutterSecureStorage? storage,
   })  : _client = client ?? http.Client(),
         _storage = storage ?? const FlutterSecureStorage();
 
-  /// Not authenticated while not logged in.
-  /// The mock returned true immediately — real checks token presence.
   @override
-  bool get isAuthenticated => _token != null || _storedToken != null;
-
-  String? _storedToken;
+  bool get isAuthenticated => _token != null;
 
   @override
   int? get userId => _userId;
@@ -41,41 +40,48 @@ class RealAuthService implements AuthService {
   @override
   String? get userName => _userName;
 
-  // ---- CODE FLOW ----
+  // ── PRIMARY: PASSWORD FLOW ──
 
-  /// Send a verification code to [email], returns success.
-  Future<bool> sendCode(String email) async {
-    final url = Uri.parse('https://api-v8.volleyballlife.com/account/code');
-    final response = await _client.post(
-      url,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'email': email}),
-    );
-    return response.statusCode == 200;
-  }
-
-  /// Login with a verification [code] previously sent to [email].
   @override
-  Future<bool> login(String email, String code) async {
-    final url =
-        Uri.parse('https://api-v8.volleyballlife.com/account/code-login');
+  Future<bool> login(String email, String password) async {
+    final url = Uri.parse('$_baseUrl/Account/Login');
     try {
       final response = await _client.post(
         url,
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'email': email, 'code': code}),
+        body: jsonEncode({
+          'userName': email,
+          'password': password,
+        }),
       );
 
-      if (response.statusCode != 200) return false;
+      if (response.statusCode != 200) {
+        debugPrint('RealAuthService.login failed: ${response.statusCode}');
+        return false;
+      }
 
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      _token = data['token'] as String? ?? data['access_token'] as String?;
-      _userId = data['userId'] as int? ?? data['user_id'] as int?;
-      _userName = data['userName'] as String? ?? data['name'] as String?;
+      final data = jsonDecode(response.body);
+
+      // VBL returns { access_token: "...", data: { ... } }
+      _token = data['access_token'] as String?;
+
+      // Extract user info from nested `data` object
+      if (data['data'] != null) {
+        final userData = data['data'] as Map<String, dynamic>;
+        _userId = userData['userId'] as int? ?? userData['Id'] as int?;
+        _userName = userData['userName'] as String? ??
+            userData['UserName'] as String?;
+      }
 
       if (_token != null) {
         await _storage.write(key: _tokenKey, value: _token);
-        _storedToken = _token;
+        // Also persist whatever user info was extracted
+        if (_userId != null) {
+          await _storage.write(key: 'vbl_user_id', value: _userId.toString());
+        }
+        if (_userName != null) {
+          await _storage.write(key: 'vbl_user_name', value: _userName);
+        }
       }
 
       return _token != null;
@@ -85,53 +91,86 @@ class RealAuthService implements AuthService {
     }
   }
 
-  /// Legacy email/password fallback (if VBL API supports it).
-  Future<bool> loginWithPassword(String email, String password) async {
-    final url = Uri.parse('https://api-v8.volleyballlife.com/account/login');
+  // ── FALLBACK: CODE FLOW ──
+
+  @override
+  Future<bool> sendCode(String email) async {
+    final url = Uri.parse('$_baseUrl/Account/Code');
     try {
       final response = await _client.post(
         url,
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'email': email, 'password': password}),
+        body: jsonEncode({'username': email}),
       );
-      if (response.statusCode != 200) return false;
-
-      final data = jsonDecode(response.body);
-      _token = data['token'] as String? ?? data['access_token'] as String?;
-      _userId = data['userId'] as int?;
-      _userName = data['userName'] as String?;
-
-      if (_token != null) {
-        await _storage.write(key: _tokenKey, value: _token);
-        _storedToken = _token;
-      }
-      return _token != null;
+      return response.statusCode == 200;
     } catch (e) {
-      debugPrint('RealAuthService.loginWithPassword failed: $e');
+      debugPrint('RealAuthService.sendCode failed: $e');
       return false;
     }
   }
 
   @override
+  Future<bool> loginWithCode(String email, String code) async {
+    final url = Uri.parse('$_baseUrl/Account/Code-Login');
+    try {
+      final response = await _client.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'userName': email, 'password': code}),
+      );
+
+      if (response.statusCode != 200) return false;
+
+      final result = jsonDecode(response.body);
+      _token = result['access_token'] as String?;
+
+      if (result['data'] != null) {
+        final userData = result['data'] as Map<String, dynamic>;
+        _userId = userData['userId'] as int? ?? userData['Id'] as int?;
+        _userName = userData['userName'] as String? ??
+            userData['UserName'] as String?;
+      }
+
+      if (_token != null) {
+        await _storage.write(key: _tokenKey, value: _token);
+        if (_userId != null) {
+          await _storage.write(key: 'vbl_user_id', value: _userId.toString());
+        }
+        if (_userName != null) {
+          await _storage.write(key: 'vbl_user_name', value: _userName);
+        }
+      }
+
+      return _token != null;
+    } catch (e) {
+      debugPrint('RealAuthService.loginWithCode failed: $e');
+      return false;
+    }
+  }
+
+  // ── SESSION MANAGEMENT ──
+
+  @override
   Future<void> logout() async {
     _token = null;
-    _storedToken = null;
     _userId = null;
     _userName = null;
     await _storage.delete(key: _tokenKey);
+    await _storage.delete(key: 'vbl_user_id');
+    await _storage.delete(key: 'vbl_user_name');
   }
 
   @override
   Future<void> restoreSession() async {
     final token = await _storage.read(key: _tokenKey);
     if (token != null) {
-      _storedToken = token;
       _token = token;
-      // Optionally validate token with a ping to /account/ping
-      // For now we trust the stored token.
+      final idStr = await _storage.read(key: 'vbl_user_id');
+      _userId = idStr != null ? int.tryParse(idStr) : null;
+      _userName = await _storage.read(key: 'vbl_user_name');
     }
   }
 
-  /// Expose the auth token for the API client to use in Authorization headers.
-  String? get authToken => _token ?? _storedToken;
+  @override
+  String? get authToken => _token;
 }

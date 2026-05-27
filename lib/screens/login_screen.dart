@@ -12,57 +12,21 @@ class LoginScreen extends ConsumerStatefulWidget {
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _emailController = TextEditingController();
-  final _codeController = TextEditingController();
+  final _passwordController = TextEditingController();
   bool _loading = false;
+  bool _obscurePassword = true;
   String? _error;
 
-  /// true after code is sent, before it's verified
-  bool _codeSent = false;
-
-  Future<void> _sendCode() async {
+  Future<void> _login() async {
     final email = _emailController.text.trim();
+    final password = _passwordController.text;
+
     if (email.isEmpty) {
       setState(() => _error = 'Enter your email address');
       return;
     }
-
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-
-    try {
-      final auth = ref.read(authServiceProvider);
-      final ok = await auth.sendCode(email);
-      if (!mounted) return;
-
-      if (ok) {
-        setState(() {
-          _codeSent = true;
-          _loading = false;
-        });
-      } else {
-        setState(() {
-          _error = 'Failed to send code. Check your email address.';
-          _loading = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = 'Network error. Please try again.';
-          _loading = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _verifyCode() async {
-    final email = _emailController.text.trim();
-    final code = _codeController.text.trim();
-
-    if (code.isEmpty) {
-      setState(() => _error = 'Enter the code from your email');
+    if (password.isEmpty) {
+      setState(() => _error = 'Enter your password');
       return;
     }
 
@@ -73,7 +37,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
     try {
       final auth = ref.read(authServiceProvider);
-      final success = await auth.login(email, code);
+      final success = await auth.login(email, password);
 
       if (!mounted) return;
 
@@ -81,7 +45,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         context.go('/dashboard');
       } else {
         setState(() {
-          _error = 'Invalid or expired code. Try again.';
+          _error = 'Invalid email or password. Try again.';
           _loading = false;
         });
       }
@@ -98,7 +62,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   @override
   void dispose() {
     _emailController.dispose();
-    _codeController.dispose();
+    _passwordController.dispose();
     super.dispose();
   }
 
@@ -137,78 +101,50 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  _codeSent
-                      ? 'Check your email for the verification code'
-                      : 'Sign in to your Volleyball Life account',
+                  'Sign in with your Volleyball Life account',
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: Colors.grey[600],
                   ),
                 ),
                 const SizedBox(height: 40),
 
-                // Step indicator
-                if (_codeSent)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 24),
-                    child: Row(
-                      children: [
-                        _stepChip('1', 'Email', true, theme),
-                        const Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 8),
-                          child: Icon(Icons.arrow_forward, size: 18, color: Colors.grey),
-                        ),
-                        _stepChip('2', 'Verify', true, theme),
-                      ],
-                    ),
-                  ),
-
                 // Email field
                 TextField(
                   controller: _emailController,
                   decoration: const InputDecoration(
-                    labelText: 'Email',
+                    labelText: 'Email or Username',
                     prefixIcon: Icon(Icons.email_outlined),
                     border: OutlineInputBorder(),
                   ),
                   keyboardType: TextInputType.emailAddress,
-                  textInputAction:
-                      _codeSent ? TextInputAction.next : TextInputAction.done,
+                  textInputAction: TextInputAction.next,
                   autocorrect: false,
-                  onSubmitted: _codeSent ? null : (_) => _sendCode(),
+                  onSubmitted: (_) => FocusScope.of(context).nextFocus(),
                 ),
                 const SizedBox(height: 16),
 
-                // Code field (only after code sent)
-                if (_codeSent) ...[
-                  TextField(
-                    controller: _codeController,
-                    decoration: const InputDecoration(
-                      labelText: 'Verification Code',
-                      prefixIcon: Icon(Icons.lock_outlined),
-                      border: OutlineInputBorder(),
-                    ),
-                    keyboardType: TextInputType.number,
-                    textInputAction: TextInputAction.done,
-                    onSubmitted: (_) => _verifyCode(),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Back to email step
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton.icon(
-                      onPressed: () {
-                        setState(() {
-                          _codeSent = false;
-                          _error = null;
-                        });
-                      },
-                      icon: const Icon(Icons.arrow_back, size: 18),
-                      label: const Text('Use a different email'),
+                // Password field
+                TextField(
+                  controller: _passwordController,
+                  decoration: InputDecoration(
+                    labelText: 'Password',
+                    prefixIcon: const Icon(Icons.lock_outlined),
+                    border: const OutlineInputBorder(),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _obscurePassword
+                            ? Icons.visibility_off
+                            : Icons.visibility,
+                      ),
+                      onPressed: () =>
+                          setState(() => _obscurePassword = !_obscurePassword),
                     ),
                   ),
-                  const SizedBox(height: 8),
-                ],
+                  obscureText: _obscurePassword,
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (_) => _login(),
+                ),
+                const SizedBox(height: 24),
 
                 // Error message
                 if (_error != null)
@@ -238,14 +174,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     ),
                   ),
 
-                // Submit button
+                // Login button
                 SizedBox(
                   width: double.infinity,
                   height: 48,
                   child: ElevatedButton(
-                    onPressed: _loading
-                        ? null
-                        : (_codeSent ? _verifyCode : _sendCode),
+                    onPressed: _loading ? null : _login,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: theme.colorScheme.primary,
+                      foregroundColor: Colors.white,
+                    ),
                     child: _loading
                         ? const SizedBox(
                             height: 24,
@@ -255,9 +193,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               color: Colors.white,
                             ),
                           )
-                        : Text(
-                            _codeSent ? 'VERIFY CODE' : 'SEND CODE',
-                            style: const TextStyle(
+                        : const Text(
+                            'SIGN IN',
+                            style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.w600,
                             ),
@@ -269,34 +207,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           ),
         ),
       ),
-    );
-  }
-
-  Widget _stepChip(String number, String label, bool active, ThemeData theme) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 24,
-          height: 24,
-          decoration: BoxDecoration(
-            color: active ? theme.colorScheme.primary : Colors.grey[300],
-            shape: BoxShape.circle,
-          ),
-          child: Center(
-            child: Text(
-              number,
-              style: TextStyle(
-                color: active ? Colors.white : Colors.grey[600],
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 6),
-        Text(label, style: const TextStyle(fontSize: 13)),
-      ],
     );
   }
 }

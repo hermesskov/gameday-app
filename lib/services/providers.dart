@@ -5,7 +5,7 @@ import 'real_api_client.dart';
 
 /// Real auth service — talks to api-v8.volleyballlife.com
 final authServiceProvider = Provider<RealAuthService>((ref) {
-  return RealAuthService(baseUrl: () => 'https://api-v8.volleyballlife.com');
+  return RealAuthService();
 });
 
 /// Real API client — authenticated requests against the VBL backend

@@ -1,72 +1,34 @@
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/foundation.dart';
 
-/// Cookie-based session auth. Real implementation calls POST to
-/// volleyballlife.com auth endpoint and stores the session cookie.
+/// Interface for the VBL auth service.
 abstract class AuthService {
+  /// Whether a valid session is currently stored.
   bool get isAuthenticated;
+
+  /// The authenticated user's ID (null if not logged in).
   int? get userId;
+
+  /// The authenticated user's display name (null if not logged in).
   String? get userName;
+
+  /// Login with email/username and password.
+  ///
+  /// Calls POST /Account/Login on the VBL API.
+  /// Returns true on success, false on invalid credentials.
   Future<bool> login(String email, String password);
+
+  /// Clear the stored session.
   Future<void> logout();
+
+  /// Try to restore a previously saved session (e.g. on app start).
   Future<void> restoreSession();
-}
 
-class MockAuthService implements AuthService {
-  static const _userIdKey = 'mock_user_id';
-  static const _userNameKey = 'mock_user_name';
+  /// Expose the auth token for the API client to use in Authorization headers.
+  String? get authToken;
 
-  @override
-  bool isAuthenticated = false;
+  /// Send a verification code to the user's email (optional fallback).
+  Future<bool> sendCode(String email);
 
-  @override
-  int? userId;
-
-  @override
-  String? userName;
-
-  @override
-  Future<bool> login(String email, String password) async {
-    // Simulate API delay
-    await Future.delayed(const Duration(seconds: 1));
-
-    // Mock validation — accepts any non-empty email/password
-    if (email.isEmpty || password.isEmpty) {
-      return false;
-    }
-
-    isAuthenticated = true;
-    userId = 98765;
-    userName = 'Karissa Cook';
-
-    // Persist mock session
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_userIdKey, userId!);
-    await prefs.setString(_userNameKey, userName!);
-
-    return true;
-  }
-
-  @override
-  Future<void> logout() async {
-    isAuthenticated = false;
-    userId = null;
-    userName = null;
-
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_userIdKey);
-    await prefs.remove(_userNameKey);
-  }
-
-  @override
-  Future<void> restoreSession() async {
-    final prefs = await SharedPreferences.getInstance();
-    final storedId = prefs.getInt(_userIdKey);
-    final storedName = prefs.getString(_userNameKey);
-
-    if (storedId != null && storedName != null) {
-      isAuthenticated = true;
-      userId = storedId;
-      userName = storedName;
-    }
-  }
+  /// Login with an email + verification code (optional fallback).
+  Future<bool> loginWithCode(String email, String code);
 }
