@@ -38,6 +38,14 @@ class RealApiClient implements ApiClient {
     };
   }
 
+  /// Check a response for auth expiry. If 401, clear session and throw.
+  void _checkAuth(http.Response response) {
+    if (response.statusCode == 401) {
+      _auth.logout();
+      throw AuthExpiredException();
+    }
+  }
+
   // ---- SCHEDULE ----
 
   @override
@@ -46,6 +54,7 @@ class RealApiClient implements ApiClient {
         .replace(queryParameters: {'date': date});
 
     final response = await _client.get(url, headers: _headers());
+    _checkAuth(response);
     if (response.statusCode != 200) {
       throw ApiException('Failed to fetch schedule: ${response.statusCode}');
     }
@@ -67,6 +76,7 @@ class RealApiClient implements ApiClient {
     });
 
     final response = await _client.post(url, headers: _headers(), body: body);
+    _checkAuth(response);
     if (response.statusCode != 200) {
       throw ApiException('Failed to start scoring: ${response.statusCode}');
     }
@@ -100,6 +110,7 @@ class RealApiClient implements ApiClient {
     final url = Uri.parse(
         '$_api/matches/scoring/update?key=&timestamp=${DateTime.now().millisecondsSinceEpoch}');
     final response = await _client.post(url, headers: _headers(), body: dto);
+    _checkAuth(response);
     if (response.statusCode != 200) {
       throw ApiException('Failed to update score: ${response.statusCode}');
     }
@@ -113,6 +124,7 @@ class RealApiClient implements ApiClient {
     final body = jsonEncode({'tournamentId': tournamentId});
     final response =
         await _client.post(url, headers: _headers(), body: body);
+    _checkAuth(response);
     if (response.statusCode != 200) {
       throw ApiException('Failed to check in: ${response.statusCode}');
     }
@@ -216,6 +228,12 @@ class RealApiClient implements ApiClient {
       );
     }).toList();
   }
+}
+
+/// Thrown when the API returns 401 — session expired or invalid.
+class AuthExpiredException implements Exception {
+  @override
+  String toString() => 'AuthExpiredException: session expired';
 }
 
 class ApiException implements Exception {

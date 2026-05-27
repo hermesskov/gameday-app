@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../services/providers.dart';
+import '../services/real_api_client.dart';
 import '../models/schedule_response.dart';
 import '../models/schedule_event.dart';
 import '../widgets/match_card.dart';
@@ -14,8 +15,8 @@ class EventDashboard extends ConsumerStatefulWidget {
 }
 
 class _EventDashboardState extends ConsumerState<EventDashboard> {
-  AsyncValue<ScheduleResponse>? _schedule;
-  bool _checkedIn = false;
+  /// One of: loading | data | error — driven by API call result.
+  AsyncValue<ScheduleResponse> _schedule = const AsyncLoading();
 
   @override
   void initState() {
@@ -24,29 +25,28 @@ class _EventDashboardState extends ConsumerState<EventDashboard> {
   }
 
   Future<void> _loadSchedule() async {
-    final api = ref.read(apiClientProvider);
-    final schedule = await api.getUserSchedule('2026-06-15');
-    setState(() {
-      _schedule = AsyncValue.data(schedule);
-    });
-  }
+    // Today's date in YYYY-MM-DD format for the VBL API
+    final today = DateTime.now();
+    final dateStr =
+        '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
 
-  Future<void> _handleCheckIn() async {
-    final api = ref.read(apiClientProvider);
-    await api.checkIn(45678);
-    setState(() => _checkedIn = true);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Checked in successfully!'),
-          behavior: SnackBarBehavior.floating,
-        ),
+    setState(() => _schedule = const AsyncLoading());
+
+    try {
+      final api = ref.read(apiClientProvider);
+      final schedule = await api.getUserSchedule(dateStr);
+      if (!mounted) return;
+      setState(() => _schedule = AsyncValue.data(schedule));
+    } catch (e) {
+      if (!mounted) return;
+      setState(
+        () => _schedule = AsyncValue.error(e, StackTrace.current),
       );
     }
   }
 
   ScheduleEvent? get _nextMatch {
-    final schedule = _schedule?.valueOrNull;
+    final schedule = _schedule.valueOrNull;
     if (schedule == null || schedule.events.isEmpty) return null;
 
     // First event that's upcoming or in-progress
@@ -59,12 +59,17 @@ class _EventDashboardState extends ConsumerState<EventDashboard> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final schedule = _schedule?.valueOrNull;
-    final isLoading = _schedule == null;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(schedule?.events.first.tournamentName ?? 'VBL Gameday'),
+        title: Text(
+          _schedule.whenOrNull(
+                data: (s) => s.events.isNotEmpty
+                    ? s.events.first.tournamentName
+                    : 'VBL Gameday',
+              ) ??
+              'VBL Gameday',
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.notifications_outlined),
@@ -72,147 +77,166 @@ class _EventDashboardState extends ConsumerState<EventDashboard> {
           ),
         ],
       ),
-      body: isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _loadSchedule,
-              child: ListView(
-                padding: const EdgeInsets.only(bottom: 24),
-                children: [
-                  // Check-in card
-                  if (!_checkedIn)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-                      child: Card(
-                        color: theme.colorScheme.primaryContainer,
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
+      body: _schedule.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (err, _) => _buildError(err),
+        data: (schedule) => RefreshIndicator(
+          onRefresh: _loadSchedule,
+          child: ListView(
+            padding: const EdgeInsets.only(bottom: 24),
+            children: [
+              if (schedule.events.isEmpty) ...[
+                SizedBox(
+                  height: MediaQuery.of(context).size.height * 0.6,
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.event_busy,
+                            size: 48, color: Colors.grey[400]),
+                        const SizedBox(height: 12),
+                        Text(
+                          'No upcoming events',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Pull down to refresh',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey[400],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ] else ...[
+                // Section: Your Schedule
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Text(
+                    'Your Schedule',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+
+                ...schedule.events.map((event) {
+                  final isNextMatch = event == _nextMatch;
+                  return Column(
+                    children: [
+                      if (isNextMatch && event.status != 'Started')
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
                           child: Row(
                             children: [
-                              Icon(
-                                Icons.check_circle_outline,
-                                color: theme.colorScheme.onPrimaryContainer,
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'Check In',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w600,
-                                        color:
-                                            theme.colorScheme.onPrimaryContainer,
-                                      ),
-                                    ),
-                                    Text(
-                                      "Confirm you're here",
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        color: theme
-                                            .colorScheme.onPrimaryContainer
-                                            .withOpacity(0.7),
-                                      ),
-                                    ),
-                                  ],
+                              Icon(Icons.star,
+                                  size: 14,
+                                  color: theme.colorScheme.primary),
+                              const SizedBox(width: 4),
+                              Text(
+                                'NEXT UP',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: theme.colorScheme.primary,
+                                  letterSpacing: 1,
                                 ),
-                              ),
-                              ElevatedButton(
-                                onPressed: _handleCheckIn,
-                                child: const Text('CHECK IN'),
                               ),
                             ],
                           ),
                         ),
+                      MatchCard(
+                        event: event,
+                        onTap: event.canScore && event.liveScoring != null
+                            ? () => context.go('/live-score',
+                                extra: event)
+                            : null,
                       ),
-                    ),
+                    ],
+                  );
+                }),
 
-                  // Section: Your Schedule
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                    child: Text(
-                      'Your Schedule',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-
-                  if (schedule == null || schedule.events.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.all(32),
-                      child: Center(
-                        child: Text(
-                          'No events scheduled for today',
-                          style: TextStyle(color: Colors.grey[500]),
-                        ),
-                      ),
-                    )
-                  else
-                    ...schedule.events.map((event) {
-                      final isNextMatch = event == _nextMatch;
-                      return Column(
-                        children: [
-                          if (isNextMatch && event.status != 'Started')
-                            Padding(
-                              padding:
-                                  const EdgeInsets.fromLTRB(16, 4, 16, 4),
-                              child: Row(
-                                children: [
-                                  Icon(Icons.star,
-                                      size: 14,
-                                      color: theme.colorScheme.primary),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    'NEXT UP',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w600,
-                                      color: theme.colorScheme.primary,
-                                      letterSpacing: 1,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          MatchCard(
-                            event: event,
-                            onTap: event.canScore && event.liveScoring != null
-                                ? () => context.go('/live-score',
-                                    extra: event)
-                                : null,
-                          ),
-                        ],
-                      );
-                    }),
-
-                  // Quick links section
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
-                    child: Text(
-                      'Quick Links',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+                // Quick links
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
+                  child: Text(
+                    'Quick Links',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
-                  _QuickLinkCard(
-                    icon: Icons.account_tree,
-                    title: 'Tournament Bracket',
-                    subtitle: 'View full bracket and standings',
-                    onTap: () => context.go('/bracket'),
-                  ),
-                  _QuickLinkCard(
-                    icon: Icons.favorite_border,
-                    title: 'Watchlist',
-                    subtitle: 'Bookmarked matches and teams',
-                    onTap: () => context.go('/watchlist'),
-                  ),
-                ],
+                ),
+                _QuickLinkCard(
+                  icon: Icons.account_tree,
+                  title: 'Tournament Bracket',
+                  subtitle: 'View full bracket and standings',
+                  onTap: () => context.go('/bracket'),
+                ),
+                _QuickLinkCard(
+                  icon: Icons.favorite_border,
+                  title: 'Watchlist',
+                  subtitle: 'Bookmarked matches and teams',
+                  onTap: () => context.go('/watchlist'),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildError(Object err) {
+    // Auth expired — redirect to login
+    if (err is AuthExpiredException) {
+      // Schedule redirect after build completes
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) context.go('/login');
+      });
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final message = err.toString();
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.cloud_off, size: 48, color: Colors.grey[400]),
+            const SizedBox(height: 12),
+            Text(
+              'Could not load schedule',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+                color: Colors.grey[600],
               ),
             ),
+            const SizedBox(height: 4),
+            Text(
+              message.contains('401') || message.contains('Unauthorized')
+                  ? 'Session expired. Please sign in again.'
+                  : 'Check your connection and try again.',
+              style: TextStyle(fontSize: 13, color: Colors.grey[400]),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: _loadSchedule,
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text('Retry'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
