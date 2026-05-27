@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../models/schedule_event.dart';
 import '../services/providers.dart';
-import '../services/api_client.dart';
 
 class LiveScoreScreen extends ConsumerStatefulWidget {
   final ScheduleEvent event;
@@ -19,7 +18,6 @@ class _LiveScoreScreenState extends ConsumerState<LiveScoreScreen> {
   late int _scoreB;
   final List<_ScoreSnapshot> _history = [];
   bool _submitting = false;
-  bool _started = false;
 
   @override
   void initState() {
@@ -42,7 +40,6 @@ class _LiveScoreScreenState extends ConsumerState<LiveScoreScreen> {
   Future<void> _startScoring() async {
     final api = ref.read(apiClientProvider);
     await api.startScoring(widget.event.matchId);
-    setState(() => _started = true);
   }
 
   void _addPoint(bool teamA) {
@@ -139,7 +136,7 @@ class _LiveScoreScreenState extends ConsumerState<LiveScoreScreen> {
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 8),
-            color: theme.colorScheme.primaryDark.withOpacity(0.05),
+            color: theme.colorScheme.primary.withOpacity(0.05),
             child: Center(
               child: Text(
                 widget.event.court != null

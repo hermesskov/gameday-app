@@ -4,6 +4,8 @@
 build/
 *.iml
 *.lock
+.flutter-plugins
+.flutter-plugins-dependencies
 
 # IDE
 .idea/

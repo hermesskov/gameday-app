@@ -1,4 +1,3 @@
-import '../models/team.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Cookie-based session auth. Real implementation calls POST to

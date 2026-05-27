@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../services/providers.dart';
-import '../services/api_client.dart';
 import '../models/schedule_response.dart';
+import '../models/schedule_event.dart';
 import '../widgets/match_card.dart';
 
 class EventDashboard extends ConsumerStatefulWidget {
@@ -25,9 +25,9 @@ class _EventDashboardState extends ConsumerState<EventDashboard> {
 
   Future<void> _loadSchedule() async {
     final api = ref.read(apiClientProvider);
-    // Use today's date in production
+    final schedule = await api.getUserSchedule('2026-06-15');
     setState(() {
-      _schedule = AsyncValue.data(await api.getUserSchedule('2026-06-15'));
+      _schedule = AsyncValue.data(schedule);
     });
   }
 
@@ -179,7 +179,7 @@ class _EventDashboardState extends ConsumerState<EventDashboard> {
                             ),
                           MatchCard(
                             event: event,
-                            onTap: event.canScore && event.matchId != null
+                            onTap: event.canScore && event.liveScoring != null
                                 ? () => context.go('/live-score',
                                     extra: event)
                                 : null,
