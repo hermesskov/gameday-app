@@ -1,5 +1,3 @@
-import 'package:flutter/foundation.dart';
-
 /// Interface for the VBL auth service.
 abstract class AuthService {
   /// Whether a valid session is currently stored.

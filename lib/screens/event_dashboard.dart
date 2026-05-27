@@ -18,6 +18,9 @@ class _EventDashboardState extends ConsumerState<EventDashboard> {
   /// One of: loading | data | error — driven by API call result.
   AsyncValue<ScheduleResponse> _schedule = const AsyncLoading();
 
+  /// Tournament IDs that have been checked in this session.
+  final Set<int> _checkedInTournaments = {};
+
   @override
   void initState() {
     super.initState();
@@ -54,6 +57,32 @@ class _EventDashboardState extends ConsumerState<EventDashboard> {
       (e) => e.isMatch && e.role == 'player',
       orElse: () => schedule.events.first,
     );
+  }
+
+  Future<void> _handleCheckIn(int tournamentId) async {
+    try {
+      final api = ref.read(apiClientProvider);
+      await api.checkIn(tournamentId);
+      if (!mounted) return;
+      setState(() => _checkedInTournaments.add(tournamentId));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Checked in!'),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 2),
+        ),
+      );
+    } on AuthExpiredException {
+      // handled globally
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Check-in failed. Try again.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   @override
@@ -159,6 +188,28 @@ class _EventDashboardState extends ConsumerState<EventDashboard> {
                                 extra: event)
                             : null,
                       ),
+                      // Check-in button (per tournament, once per session)
+                      if (event.tournamentId > 0 &&
+                          !_checkedInTournaments.contains(event.tournamentId))
+                        Padding(
+                          padding:
+                              const EdgeInsets.fromLTRB(16, 0, 16, 6),
+                          child: SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              onPressed: () =>
+                                  _handleCheckIn(event.tournamentId),
+                              icon: const Icon(Icons.login, size: 16),
+                              label: const Text('CHECK IN'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.green[700],
+                                side: BorderSide(color: Colors.green[300]!),
+                                padding: const EdgeInsets.symmetric(
+                                    vertical: 6),
+                              ),
+                            ),
+                          ),
+                        ),
                     ],
                   );
                 }),
