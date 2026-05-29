@@ -1,87 +1,36 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../services/providers.dart';
 import '../services/real_api_client.dart';
 import '../models/schedule_response.dart';
 import '../models/schedule_event.dart';
 import '../widgets/match_card.dart';
 
-class EventDashboard extends ConsumerStatefulWidget {
+class EventDashboard extends StatefulWidget {
   const EventDashboard({super.key});
 
   @override
-  ConsumerState<EventDashboard> createState() => _EventDashboardState();
+  State<EventDashboard> createState() => _EventDashboardState();
 }
 
-class _EventDashboardState extends ConsumerState<EventDashboard> {
-  /// One of: loading | data | error — driven by API call result.
-  AsyncValue<ScheduleResponse> _schedule = const AsyncLoading();
-
-  /// Tournament IDs that have been checked in this session.
-  final Set<int> _checkedInTournaments = {};
+class _EventDashboardState extends State<EventDashboard> {
+  final _api = RealApiClient();
+  AsyncValue<ScheduleResponse> _events = const AsyncLoading();
 
   @override
   void initState() {
     super.initState();
-    _loadSchedule();
+    _loadEvents();
   }
 
-  Future<void> _loadSchedule() async {
-    // Today's date in YYYY-MM-DD format for the VBL API
-    final today = DateTime.now();
-    final dateStr =
-        '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
-
-    setState(() => _schedule = const AsyncLoading());
-
+  Future<void> _loadEvents() async {
+    setState(() => _events = const AsyncLoading());
     try {
-      final api = ref.read(apiClientProvider);
-      final schedule = await api.getUserSchedule(dateStr);
+      final schedule = await _api.getPublicEvents();
       if (!mounted) return;
-      setState(() => _schedule = AsyncValue.data(schedule));
+      setState(() => _events = AsyncValue.data(schedule));
     } catch (e) {
       if (!mounted) return;
-      setState(
-        () => _schedule = AsyncValue.error(e, StackTrace.current),
-      );
-    }
-  }
-
-  ScheduleEvent? get _nextMatch {
-    final schedule = _schedule.valueOrNull;
-    if (schedule == null || schedule.events.isEmpty) return null;
-
-    // First event that's upcoming or in-progress
-    return schedule.events.firstWhere(
-      (e) => e.isMatch && e.role == 'player',
-      orElse: () => schedule.events.first,
-    );
-  }
-
-  Future<void> _handleCheckIn(int tournamentId) async {
-    try {
-      final api = ref.read(apiClientProvider);
-      await api.checkIn(tournamentId);
-      if (!mounted) return;
-      setState(() => _checkedInTournaments.add(tournamentId));
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Checked in!'),
-          behavior: SnackBarBehavior.floating,
-          duration: Duration(seconds: 2),
-        ),
-      );
-    } on AuthExpiredException {
-      // handled globally
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Check-in failed. Try again.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      setState(() => _events = AsyncValue.error(e, StackTrace.current));
     }
   }
 
@@ -91,30 +40,23 @@ class _EventDashboardState extends ConsumerState<EventDashboard> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          _schedule.whenOrNull(
-                data: (s) => s.events.isNotEmpty
-                    ? s.events.first.tournamentName
-                    : 'VBL Gameday',
-              ) ??
-              'VBL Gameday',
-        ),
+        title: const Text('VBL Gameday'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.notifications_outlined),
-            onPressed: () => context.go('/watchlist'),
+            icon: const Icon(Icons.account_tree),
+            onPressed: () => context.go('/bracket'),
           ),
         ],
       ),
-      body: _schedule.when(
+      body: _events.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (err, _) => _buildError(err),
         data: (schedule) => RefreshIndicator(
-          onRefresh: _loadSchedule,
+          onRefresh: _loadEvents,
           child: ListView(
             padding: const EdgeInsets.only(bottom: 24),
             children: [
-              if (schedule.events.isEmpty) ...[
+              if (schedule.events.isEmpty)
                 SizedBox(
                   height: MediaQuery.of(context).size.height * 0.6,
                   child: Center(
@@ -125,7 +67,7 @@ class _EventDashboardState extends ConsumerState<EventDashboard> {
                             size: 48, color: Colors.grey[400]),
                         const SizedBox(height: 12),
                         Text(
-                          'No upcoming events',
+                          'No events today',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w500,
@@ -143,78 +85,26 @@ class _EventDashboardState extends ConsumerState<EventDashboard> {
                       ],
                     ),
                   ),
-                ),
-              ] else ...[
-                // Section: Your Schedule
+                )
+              else ...[
+                // Section: Today's Events
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                   child: Text(
-                    'Your Schedule',
+                    "Today's Events",
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
+                ...schedule.events.map((event) => MatchCard(
+                  event: event,
+                  onTap: event.isMatch
+                      ? () => context.go('/live-score', extra: event)
+                      : null,
+                )),
 
-                ...schedule.events.map((event) {
-                  final isNextMatch = event == _nextMatch;
-                  return Column(
-                    children: [
-                      if (isNextMatch && event.status != 'Started')
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-                          child: Row(
-                            children: [
-                              Icon(Icons.star,
-                                  size: 14,
-                                  color: theme.colorScheme.primary),
-                              const SizedBox(width: 4),
-                              Text(
-                                'NEXT UP',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: theme.colorScheme.primary,
-                                  letterSpacing: 1,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      MatchCard(
-                        event: event,
-                        onTap: event.canScore && event.liveScoring != null
-                            ? () => context.go('/live-score',
-                                extra: event)
-                            : null,
-                      ),
-                      // Check-in button (per tournament, once per session)
-                      if (event.tournamentId > 0 &&
-                          !_checkedInTournaments.contains(event.tournamentId))
-                        Padding(
-                          padding:
-                              const EdgeInsets.fromLTRB(16, 0, 16, 6),
-                          child: SizedBox(
-                            width: double.infinity,
-                            child: OutlinedButton.icon(
-                              onPressed: () =>
-                                  _handleCheckIn(event.tournamentId),
-                              icon: const Icon(Icons.login, size: 16),
-                              label: const Text('CHECK IN'),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: Colors.green[700],
-                                side: BorderSide(color: Colors.green[300]!),
-                                padding: const EdgeInsets.symmetric(
-                                    vertical: 6),
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
-                  );
-                }),
-
-                // Quick links
+                // Quick Links
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
                   child: Text(
@@ -230,12 +120,6 @@ class _EventDashboardState extends ConsumerState<EventDashboard> {
                   subtitle: 'View full bracket and standings',
                   onTap: () => context.go('/bracket'),
                 ),
-                _QuickLinkCard(
-                  icon: Icons.favorite_border,
-                  title: 'Watchlist',
-                  subtitle: 'Bookmarked matches and teams',
-                  onTap: () => context.go('/watchlist'),
-                ),
               ],
             ],
           ),
@@ -245,15 +129,6 @@ class _EventDashboardState extends ConsumerState<EventDashboard> {
   }
 
   Widget _buildError(Object err) {
-    // Auth expired — redirect to login
-    if (err is AuthExpiredException) {
-      // Schedule redirect after build completes
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) context.go('/login');
-      });
-      return const Center(child: CircularProgressIndicator());
-    }
-
     final message = err.toString();
     return Center(
       child: Padding(
@@ -264,7 +139,7 @@ class _EventDashboardState extends ConsumerState<EventDashboard> {
             Icon(Icons.cloud_off, size: 48, color: Colors.grey[400]),
             const SizedBox(height: 12),
             Text(
-              'Could not load schedule',
+              'Could not load events',
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.w500,
@@ -273,15 +148,13 @@ class _EventDashboardState extends ConsumerState<EventDashboard> {
             ),
             const SizedBox(height: 4),
             Text(
-              message.contains('401') || message.contains('Unauthorized')
-                  ? 'Session expired. Please sign in again.'
-                  : 'Check your connection and try again.',
+              message,
               style: TextStyle(fontSize: 13, color: Colors.grey[400]),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 16),
             ElevatedButton.icon(
-              onPressed: _loadSchedule,
+              onPressed: _loadEvents,
               icon: const Icon(Icons.refresh, size: 18),
               label: const Text('Retry'),
             ),
@@ -289,6 +162,40 @@ class _EventDashboardState extends ConsumerState<EventDashboard> {
         ),
       ),
     );
+  }
+}
+
+// AsyncValue without Riverpod dependency
+class AsyncValue<T> {
+  final T? _value;
+  final Object? _error;
+  final StackTrace? _stackTrace;
+  final bool _isLoading;
+
+  const AsyncValue._(this._value, this._error, this._stackTrace, this._isLoading);
+
+  const AsyncValue.data(T value) : this._(value, null, null, false);
+  const AsyncValue.error(Object error, StackTrace stackTrace)
+      : this._(null, error, stackTrace, false);
+  const AsyncLoading() : this._(null, null, null, true);
+
+  bool get isLoading => _isLoading;
+  bool get hasData => _value != null;
+  bool get hasError => _error != null;
+  T? get valueOrNull => _value;
+
+  Widget when({
+    required Widget Function() loading,
+    required Widget Function(Object error, StackTrace stackTrace) error,
+    required Widget Function(T data) data,
+  }) {
+    if (_isLoading) return loading();
+    if (_error != null) return error(_error!, _stackTrace ?? StackTrace.current);
+    return data(_value as T);
+  }
+
+  T? whenOrNull({required T Function(T data) data}) {
+    return hasData ? data(_value as T) : null;
   }
 }
 

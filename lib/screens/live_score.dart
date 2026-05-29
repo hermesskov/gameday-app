@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../models/schedule_event.dart';
-import '../services/providers.dart';
 import '../services/real_api_client.dart';
 
 /// Tracks scores for a single set/game.
@@ -42,16 +40,17 @@ class _SetScore {
       };
 }
 
-class LiveScoreScreen extends ConsumerStatefulWidget {
+class LiveScoreScreen extends StatefulWidget {
   final ScheduleEvent event;
 
   const LiveScoreScreen({super.key, required this.event});
 
   @override
-  ConsumerState<LiveScoreScreen> createState() => _LiveScoreScreenState();
+  State<LiveScoreScreen> createState() => _LiveScoreScreenState();
 }
 
-class _LiveScoreScreenState extends ConsumerState<LiveScoreScreen> {
+class _LiveScoreScreenState extends State<LiveScoreScreen> {
+  final _api = RealApiClient();
   /// Completed sets — added when a set ends.
   final List<_SetScore> _completedSets = [];
 
@@ -84,11 +83,8 @@ class _LiveScoreScreenState extends ConsumerState<LiveScoreScreen> {
 
   Future<void> _startScoring() async {
     try {
-      final api = ref.read(apiClientProvider);
-      await api.startScoring(widget.event.matchId);
+      await _api.startScoring(widget.event.matchId);
       if (mounted) setState(() {});
-    } on AuthExpiredException {
-      // handled globally
     } catch (e) {
       if (mounted) setState(() => _error = 'Could not start scoring session.');
     }
@@ -172,9 +168,7 @@ class _LiveScoreScreenState extends ConsumerState<LiveScoreScreen> {
     });
 
     try {
-      final api = ref.read(apiClientProvider);
-
-      await api.updateScore(widget.event.matchId, _currentSet.home, _currentSet.away);
+      await _api.updateScore(widget.event.matchId, _currentSet.home, _currentSet.away);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -185,8 +179,6 @@ class _LiveScoreScreenState extends ConsumerState<LiveScoreScreen> {
         );
         context.pop();
       }
-    } on AuthExpiredException {
-      // handled globally
     } catch (e) {
       if (mounted) {
         setState(() => _submitting = false);

@@ -20,3 +20,4 @@ Thumbs.db
 android/app/release/
 ios/Pods/
 ios/.symlinks/
+serve_with_proxy.py
