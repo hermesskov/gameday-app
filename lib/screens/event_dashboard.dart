@@ -14,7 +14,7 @@ class EventDashboard extends StatefulWidget {
 
 class _EventDashboardState extends State<EventDashboard> {
   final _api = RealApiClient();
-  AsyncValue<ScheduleResponse> _events = const AsyncLoading();
+  AsyncValue<ScheduleResponse> _events = const AsyncValue.loading();
 
   @override
   void initState() {
@@ -23,7 +23,7 @@ class _EventDashboardState extends State<EventDashboard> {
   }
 
   Future<void> _loadEvents() async {
-    setState(() => _events = const AsyncLoading());
+    setState(() => _events = const AsyncValue.loading());
     try {
       final schedule = await _api.getPublicEvents();
       if (!mounted) return;
@@ -177,7 +177,7 @@ class AsyncValue<T> {
   const AsyncValue.data(T value) : this._(value, null, null, false);
   const AsyncValue.error(Object error, StackTrace stackTrace)
       : this._(null, error, stackTrace, false);
-  const AsyncLoading() : this._(null, null, null, true);
+  const AsyncValue.loading() : this._(null, null, null, true);
 
   bool get isLoading => _isLoading;
   bool get hasData => _value != null;
